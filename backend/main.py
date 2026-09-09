@@ -2,6 +2,7 @@ import os
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from typing import Optional, List
 from sentence_transformers import SentenceTransformer
 import chromadb
 from ollama import Client
@@ -20,7 +21,8 @@ app = FastAPI(
 # 2. Add CORS Middleware to explicitly trust the frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"], 
+    # allow_origins=["http://localhost:3000"], 
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"], 
     allow_headers=["*"], 
@@ -29,11 +31,26 @@ app.add_middleware(
 # 3. Load the local Embedding Model (This may take some time on startup)
 embedding_model = SentenceTransformer("BAAI/bge-base-en-v1.5")
 
-# 4. Connect to Chroma Cloud Database and get the Chroma Collection
+# --- DIAGNOSTIC BLOCK ---
+tenant = os.getenv("CHROMA_TENANT_ID")
+database = os.getenv("CHROMA_DATABASE")
+api_key = os.getenv("CHROMA_API_KEY")
+
+print("========== CHROMA DIAGNOSTICS ==========")
+print(f"TENANT: {tenant}")
+print(f"DATABASE: {database}")
+print(f"API_KEY DETECTED: {bool(api_key)}")
+if api_key:
+    print(f"API_KEY LENGTH: {len(api_key)}")
+    print(f"API_KEY STARTS WITH: {api_key[:5]}...")
+print("========================================")
+# ------------------------
+
+# 4. Connect to Chroma Cloud Database...
 chroma_client = chromadb.CloudClient(
-    tenant=os.getenv("CHROMA_TENANT_ID"),
-    database=os.getenv("CHROMA_DATABASE"),
-    api_key=os.getenv("CHROMA_API_KEY")
+    tenant=tenant,
+    database=database,
+    api_key=api_key
 )
 collection = chroma_client.get_collection(name="arxiv_abstracts")
 
@@ -46,6 +63,7 @@ ollama_client = Client(
 # 6. Define the exact JSON shape and data types Next.js must send to API endpoint
 class SearchQuery(BaseModel):
     query: str
+    category: Optional[str] = "All"
 
 
 # 7. Define the API Endpoint that the Frontend will request.
@@ -57,14 +75,18 @@ async def chat_endpoint(request: SearchQuery):
         # Step A: Convert the user's text/query into a 768-dimensional vector and generate the Embedding
         full_query = "Represent this sentence for searching relevant passages: " + user_query
         query_vector = embedding_model.encode([full_query]).tolist()
-        
-        # Step B: Search Chroma Cloud for the top 3 most relevant papers
+
+        # Add the where-clause filter for ChromaDB
+        where_clause = {"category": request.category} if request.category and request.category != "All" else None
+
+        # Step B. Query ChromaDB for the top 3 most relevant papers using the category filter
         results = collection.query(
             query_embeddings=query_vector,
             n_results=3,
-            # where={"category": "Machine Learning (Statistics)"} 
+            where=where_clause
         )
         
+
         # Step C: Combine the retrieved abstracts into a single context string
         retrieved_abstracts = results['documents'][0]
         retrieved_titles = [meta['title'] for meta in results['metadatas'][0]]
@@ -85,16 +107,24 @@ async def chat_endpoint(request: SearchQuery):
         # {full_context}"""
 
         # (D2). Build a hybrid promt to allow longer answers and expansions
+        # Step D: Build a hybrid prompt with STRICT formatting rules
         system_prompt = f"""You are an expert academic research assistant in Machine Learning.
 
-            INSTRUCTIONS:
-            1. Primary Source: Base your answer on the provided CONTEXT. 
-            2. Mathematical Freedom: If the user asks for standard mathematical formulas, derivations, or foundational theory that is missing from the CONTEXT, you MAY provide them from your general knowledge. Clearly separate the general mathematics from the paper summaries.
-            3. Depth & Length: Provide comprehensive, multi-paragraph explanations. Break down complex concepts step-by-step.
-            4. Formatting: Use Markdown heavily. Use bullet points for lists, bold text for key terms, and LaTeX formatting (using $ and $$) for all math equations.
+                        INSTRUCTIONS:
+                        1. Primary Source: Base your answer on the provided CONTEXT. 
+                        2. Mathematical Freedom: If the user asks for standard mathematical formulas, derivations, or foundational theory that is missing from the CONTEXT, you MAY provide them from your general knowledge.
+                        3. Depth & Length: Provide comprehensive explanations step-by-step.
 
-            CONTEXT:
-            {full_context}"""
+                        STRICT FORMATTING RULES (CRITICAL):
+                        - You MUST use double blank lines (two Enters) before and after ALL headings (###), horizontal rules (---), tables, and lists. Never squash them together.
+                        - For inline math, use a single $ sign (e.g., $x = 2$).
+                        - For block math, you MUST put the equation on its own new line, wrapped in $$ (e.g., $$\n y = mx + c \n$$).
+                        - NEVER use \[ , \] , \( , \) or \boxed{{}}.
+                        - If using aligned math, you MUST write exactly \\begin{{aligned}} and \\end{{aligned}} and wrap the whole block in $$.
+                        - Do NOT squash words together when using bold text. Ensure there is a space outside the asterisks.
+
+                        CONTEXT:
+                        {full_context}"""
 
         # Step E: Send the prompt to a massive 120-billion parameter model on Ollama Cloud
         response = ollama_client.chat(
@@ -104,14 +134,30 @@ async def chat_endpoint(request: SearchQuery):
                 {"role": "user", "content": user_query}
             ]
         )
+
+        # Step F. Format the sources to include distances
+        metadatas = results["metadatas"][0]
+        distances = results["distances"][0]
         
-        # Step F: Return the final text and the paper titles back to Next.js
+        citations = []
+        for i in range(len(metadatas)):
+            citations.append({
+                "title": metadatas[i].get("title", "Unknown Title"),
+                "distance": round(distances[i], 4)
+            })
+
+       # Step G. Return the new payload (safe access for ollama.chat)
+        if isinstance(response, dict):
+            answer_text = response.get('message', {}).get('content', '') or response.get('response', '')
+        else:
+            # If using newer Ollama SDK object models
+            answer_text = getattr(getattr(response, 'message', None), 'content', '') or getattr(response, 'response', '')
+
         return {
-            "answer": response['message']['content'],
-            "sources": retrieved_titles,
-            "ChromaDB result distances": results["distances"],
-            "ChromaDB result metadatas": results["metadatas"],
+            "answer": answer_text,
+            "citations": citations
         }
+        
         
     except Exception as e:
         # If anything fails, safely send the error back to the frontend
