@@ -5,77 +5,109 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
-import "katex/dist/katex.min.css"; // Required to render math equations correctly
+import "katex/dist/katex.min.css";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
-// Define the shape of a single chat message
+// 1. Update the Message type to expect our new citations array
+type Citation = {
+  title: string;
+  distance: number;
+};
+
 type Message = {
   role: "user" | "assistant";
   content: string;
-  sources?: string[];
+  citations?: Citation[];
 };
 
-// This converts standard LLM math delimiters into standard Markdown math delimiters
-const preprocessLaTeX = (content: string) => {
-  if (!content) return "";
-  return content
-    .replace(/\\\[([\s\S]*?)\\\]/g, (match, p1) => `$$${p1}$$`)
-    .replace(/\\\(([\s\S]*?)\\\)/g, (match, p1) => `$${p1}$`);
-};
+// Replace these with the actual top 10 categories from your dataset
+const TOP_CATEGORIES = [
+"All",
+"Machine Learning",
+"Computer Vision and Pattern Recognition",
+"Computation and Language (Natural Language Processing)",
+"Artificial Intelligence",
+"Machine Learning (Statistics)",
+"Neural and Evolutionary Computing",
+"Robotics",
+"Cryptography and Security",
+"Image and Video Processing",
+"Information Retrieval"
+];
+
+
 
 export default function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
+  const [category, setCategory] = useState<string>("All"); // If no category is chosen set "All" as the default one
   const [isLoading, setIsLoading] = useState(false);
+
 
   const sendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!input.trim()) return;
 
-    // Add the user's message to the chat
     const userMessage: Message = { role: "user", content: input };
     setMessages((prev) => [...prev, userMessage]);
     setInput("");
     setIsLoading(true);
 
     try {
-      // Send the query to your Python FastAPI backend
+      // 3. Send the selected category in the payload
       const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query: userMessage.content }),
+        body: JSON.stringify({ query: userMessage.content, category: category }),
       });
 
-      if (!response.ok) throw new Error("Network response was not ok");
+      if (!response.ok) throw new Error("Network error");
 
       const data = await response.json();
       
-      // Add the AI's response and citations to the chat
       const aiMessage: Message = { 
         role: "assistant", 
         content: data.answer,
-        sources: data.sources
+        citations: data.citations
       };
+
+      console.log('Response data: ', data)
       
       setMessages((prev) => [...prev, aiMessage]);
     } catch (error) {
-      console.error("Error fetching response:", error);
-      setMessages((prev) => [...prev, { role: "assistant", content: "Sorry, there was an error connecting to the server." }]);
+      console.error("Error:", error);
+      setMessages((prev) => [...prev, { role: "assistant", content: "Error connecting to server." }]);
     } finally {
       setIsLoading(false);
     }
   };
 
   return (
-    <main className="flex min-h-screen items-center justify-center p-4 bg-zinc-50">
+    <main className="flex flex-col min-h-screen items-center justify-center p-4 bg-zinc-50">
+      <h1 className="text-2xl font-bold mb-6">Academic Research Assistant Bot</h1>
       <Card className="w-full max-w-4xl h-[85vh] flex flex-col shadow-lg">
-        <CardHeader className="border-b">
-          <CardTitle>Academic Research Assistant</CardTitle>
+        <CardHeader className="border-b flex flex-row items-center justify-between space-y-0 pb-4">
+          <CardTitle className="text-lg">Select Specific Category (Optional)</CardTitle>
+          
+          {/* 5. The Category Dropdown */}
+          <div className="w-full max-w-[380px]">
+            <Select  value={category} onValueChange={(value)=> setCategory(value || 'All')}>
+              <SelectTrigger className='w-full'>
+                <SelectValue placeholder="Select Category" />
+              </SelectTrigger>
+              <SelectContent>
+                {TOP_CATEGORIES.map((cat) => (
+                  <SelectItem key={cat} value={cat}>{cat}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
         </CardHeader>
         
         <CardContent className="flex-1 overflow-hidden p-0">
@@ -83,7 +115,7 @@ export default function ChatPage() {
             <div className="flex flex-col gap-6">
               {messages.length === 0 && (
                 <div className="text-center text-zinc-500 mt-20">
-                  Ask a question about deep learning theory to search the Chroma database.
+                  Ask a question to search the Chroma database.
                 </div>
               )}
 
@@ -93,40 +125,32 @@ export default function ChatPage() {
                     <Avatar><AvatarFallback>AI</AvatarFallback></Avatar>
                   )}
                   
-                  <div className={`max-w-[95%] rounded-md p-5 ${msg.role === 'user' ? 'bg-zinc-900 text-white' : 'bg-white border border-gray-200/50 shadow-sm'}`}>
+                  <div className={`max-w-[85%] rounded-xl p-5 ${msg.role === 'user' ? 'bg-[#F2F0F0] text-black' : 'bg-white border shadow-sm'}`}>
                     {msg.role === 'user' ? (
                       <p>{msg.content}</p>
                     ) : (
                       <div className="w-full">
-                          
                         <div className="text-sm leading-relaxed">
-                        {/* Render Markdown and Math safely */}
-                        <ReactMarkdown 
-                          remarkPlugins={[remarkGfm, remarkMath]} 
-                          rehypePlugins={[rehypeKatex]}
-                          components={{
-                            h1: ({node, ...props}) => <h1 className="text-2xl font-bold mt-4 mb-2" {...props} />,
-                            h2: ({node, ...props}) => <h2 className="text-xl font-bold mt-4 mb-2" {...props} />,
-                            h3: ({node, ...props}) => <h3 className="text-lg font-bold mt-4 mb-2" {...props} />,
-                            ul: ({node, ...props}) => <ul className="list-disc pl-6 mb-4" {...props} />,
-                            ol: ({node, ...props}) => <ol className="list-decimal pl-6 mb-4" {...props} />,
-                            p: ({node, ...props}) => <p className="mb-4 last:mb-0" {...props} />,
-                            table: ({node, ...props}) => <div className="overflow-x-auto mb-4"><table className="min-w-full border" {...props} /></div>,
-                            th: ({node, ...props}) => <th className="border px-4 py-2 bg-zinc-50" {...props} />,
-                            td: ({node, ...props}) => <td className="border px-4 py-2" {...props} />
-                          }}
-                        >
-                          {preprocessLaTeX(msg.content)}
-                        </ReactMarkdown>
+                          <ReactMarkdown 
+                            remarkPlugins={[remarkGfm, remarkMath]} 
+                            rehypePlugins={[[rehypeKatex, { strict: false, throwOnError: false }]]}
+                          >
+                            {preprocessLaTeX(msg.content)} 
+                          </ReactMarkdown>
                         </div>
                         
-                        {/* Render Citations if they exist */}
-                        {msg.sources && msg.sources.length > 0 && (
+                        {/* 6. Render Citations with Distance */}
+                        {msg.citations && msg.citations.length > 0 && (
                           <div className="mt-6 pt-4 border-t text-xs text-zinc-500">
-                            <strong className="block mb-2">Retrieved Sources:</strong>
-                            <ul className="list-disc pl-4 space-y-1">
-                              {msg.sources.map((source, i) => (
-                                <li key={i}>{source}</li>
+                            <strong className="block mb-2">Retrieved Top <span className="font-bold">{msg.citations.length}</span> Sources (Based on L2 Distance criteria):</strong>
+                            <ul className="list-none space-y-2">
+                              {msg.citations.map((cite, i) => (
+                                <li key={i} className="flex justify-between items-start bg-zinc-50 p-2 rounded">
+                                  <span className="font-medium pr-2">{cite.title}</span>
+                                  <span className="bg-zinc-200 px-2 py-1 rounded text-[10px] whitespace-nowrap font-mono">
+                                    Distance: {cite.distance}
+                                  </span>
+                                </li>
                               ))}
                             </ul>
                           </div>
@@ -140,8 +164,6 @@ export default function ChatPage() {
                   )}
                 </div>
               ))}
-
-              {/* Loading indicator */}
               {isLoading && (
                 <div className="flex gap-4 justify-start">
                    <Avatar><AvatarFallback>AI</AvatarFallback></Avatar>
@@ -172,3 +194,40 @@ export default function ChatPage() {
     </main>
   );
 }
+
+
+
+// This helper function cleans up the Markdown Text from the LLM model to eliminate formatting errors for LaTeX
+const preprocessLaTeX = (content: string) => {
+  if (!content) return "";
+  return content
+    // 1. Catch standard LaTeX block delimiters \[ ... \]
+    .replace(/\\\[([\s\S]*?)\\\]/g, (_match, p1) => `$$${p1}$$`)
+    // 2. Catch standard LaTeX inline delimiters \( ... \)
+    .replace(/\\\(([\s\S]*?)\\\)/g, (_match, p1) => `$${p1}$`)
+    
+    // 3. Strip out \tag{...} completely (it breaks Markdown parsing when placed outside math)
+    .replace(/\\tag{[^}]*}/g, "")
+    
+    // 4. THE FIX: Catch \begin...\end blocks AND absorb any single or double $ around them
+    // This stops the $ $$ ... $$ $ conflict from happening
+    .replace(/\$*\s*(\\begin{[a-zA-Z*]+}[\s\S]*?\\end{[a-zA-Z*]+})\s*\$*/g, "\n$$\n$1\n$$\n")
+    
+    // 5. Catch the bracket error: [ \begin{aligned} ... \end{aligned} ]
+    .replace(/\[\s*(\\begin{[\s\S]*?}[\s\S]*?\\end{[\s\S]*?})\s*\]/g, "\n$$\n$1\n$$\n")
+    
+    // 6. Fix \bm{} to \boldsymbol{} (KaTeX compatibility)
+    .replace(/\\bm{/g, "\\boldsymbol{")
+    // 7. Fix escaped underscores
+    .replace(/\\_/g, "_")
+    // 8. Remove the \! negative space command
+    .replace(/\\!/g, "")
+    // 9. Remove the \boxed command but leave its contents safe
+    .replace(/\\boxed/g, "")
+    
+    // 10. Clean up any accidental double-wrapping of $$ 
+    .replace(/\$\$\s*\$\$/g, "$$")
+    // 11. Ensure block math $$ has safe line breaks around it
+    .replace(/\$\$([\s\S]*?)\$\$/g, (_match, p1) => `\n$$\n${p1.trim()}\n$$\n`);
+};
+
