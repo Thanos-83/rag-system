@@ -13,11 +13,13 @@ import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/componen
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 
 // 1. Update the Message type to expect our new citations array
 type Citation = {
   title: string;
   distance: number;
+  document: string;
 };
 
 type Message = {
@@ -46,7 +48,7 @@ const TOP_CATEGORIES = [
 export default function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
-  const [category, setCategory] = useState<string>("All"); // If no category is chosen set "All" as the default one
+  const [category, setCategory] = useState<string>("All"); 
   const [isLoading, setIsLoading] = useState(false);
 
 
@@ -71,6 +73,7 @@ export default function ChatPage() {
 
       const data = await response.json();
       
+      console.log('Received data from backend: ', data);
       const aiMessage: Message = { 
         role: "assistant", 
         content: data.answer,
@@ -138,21 +141,28 @@ export default function ChatPage() {
                             {preprocessLaTeX(msg.content)} 
                           </ReactMarkdown>
                         </div>
-                        
+ 
                         {/* 6. Render Citations with Distance */}
                         {msg.citations && msg.citations.length > 0 && (
                           <div className="mt-6 pt-4 border-t text-xs text-zinc-500">
                             <strong className="block mb-2">Retrieved Top <span className="font-bold">{msg.citations.length}</span> Sources (Based on L2 Distance criteria):</strong>
-                            <ul className="list-none space-y-2">
-                              {msg.citations.map((cite, i) => (
-                                <li key={i} className="flex justify-between items-start bg-zinc-50 p-2 rounded">
-                                  <span className="font-medium pr-2">{cite.title}</span>
-                                  <span className="bg-zinc-200 px-2 py-1 rounded text-[10px] whitespace-nowrap font-mono">
-                                    Distance: {cite.distance}
-                                  </span>
-                                </li>
+                        
+                            <Accordion defaultValue={[`${msg.citations[0].title}`]} >
+                              {msg.citations.map((citation, index) => (
+                              <AccordionItem key={index} value={`${citation.title}`}>
+                                <AccordionTrigger className="border rounded-lg py-2 mb-2">
+                                  <div className="flex-1 mr-6 font-medium flex items-center justify-between">
+                                    <p>{citation.title}</p>
+                                    <span className="ml-2 text-xs bg-zinc-100 py-1 px-2 text-zinc-600">Distance: {citation.distance}</span>
+                                  </div>
+                                </AccordionTrigger>
+                                <AccordionContent>
+                                  <p>{citation.document}</p>
+                                </AccordionContent> 
+                              </AccordionItem>
                               ))}
-                            </ul>
+                            </Accordion>
+                        
                           </div>
                         )}
                       </div>

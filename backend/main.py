@@ -132,18 +132,25 @@ async def chat_endpoint(request: SearchQuery):
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_query}
-            ]
+            ],
+            options={
+                "temperature": 0,
+            }
         )
 
-        # Step F. Format the sources to include distances
-        metadatas = results["metadatas"][0]
-        distances = results["distances"][0]
+
+        # Step F. Format the sources to include the required metadata for the frontend
+        retrieved_metadatas = results["metadatas"][0]
+        retrieved_distances = results["distances"][0]
+        retrieved_documents = results["documents"][0]
         
-        citations = []
-        for i in range(len(metadatas)):
-            citations.append({
-                "title": metadatas[i].get("title", "Unknown Title"),
-                "distance": round(distances[i], 4)
+        sources = []
+        for metadata, document, distance in zip(retrieved_metadatas, retrieved_documents, retrieved_distances):
+            sources.append({
+                "title": metadata.get("title", "Unknown Title"),
+                "category": metadata.get("category", "Unknown Category"),
+                "document": document,
+                "distance": round(distance, 4)
             })
 
        # Step G. Return the new payload (safe access for ollama.chat)
@@ -155,7 +162,7 @@ async def chat_endpoint(request: SearchQuery):
 
         return {
             "answer": answer_text,
-            "citations": citations
+            "citations": sources
         }
         
         
