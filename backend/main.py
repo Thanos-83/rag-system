@@ -21,8 +21,8 @@ app = FastAPI(
 # 2. Add CORS Middleware to explicitly trust the frontend
 app.add_middleware(
     CORSMiddleware,
-    # allow_origins=["http://localhost:3000"], 
-    allow_origins=["*"],
+    allow_origins=["http://localhost:3000"], 
+    # allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"], 
     allow_headers=["*"], 
@@ -64,6 +64,12 @@ ollama_client = Client(
 class SearchQuery(BaseModel):
     query: str
     category: Optional[str] = "All"
+    n_results: Optional[int] = 3
+    temperature: Optional[float] = 0.0
+    top_k: Optional[int] = 40
+    num_predict: Optional[int] = 500
+    repeat_penalty: Optional[float] = 1.1 # Ollama's combined presence/frequency penalty
+    prompt_type: Optional[str] = "hybrid" # "strict" or "hybrid"
 
 
 # 7. Define the API Endpoint that the Frontend will request.
@@ -82,7 +88,7 @@ async def chat_endpoint(request: SearchQuery):
         # Step B. Query ChromaDB for the top 3 most relevant papers using the category filter
         results = collection.query(
             query_embeddings=query_vector,
-            n_results=3,
+            n_results=request.n_results,
             where=where_clause
         )
         
@@ -98,34 +104,40 @@ async def chat_endpoint(request: SearchQuery):
         full_context = "\n\n---\n\n".join(context_blocks)
         
         # Step D: Prompt Engineering
-        # (D1). Build a strict prompt to prevent the LLM from hallucinating
-        # system_prompt = f"""You are an expert academic research assistant. 
-        #                     Answer the user's question using ONLY the information provided in the Context below. 
-        # If the answer cannot be found in the Context, state exactly: "I do not have enough information to answer this."
+    
+        # Extract formatting rules so they apply regardless of which prompt is chosen.
+        # These rules are critical for ensuring that the output is compatible with the frontend's Markdown renderer and LaTeX parser.
+        formatting_rules = """
+        STRICT FORMATTING RULES (CRITICAL):
+        - You MUST use double blank lines (two Enters) before and after ALL headings (###), horizontal rules (---), tables, and lists. Never squash them together.
+        - For inline math, use a single $ sign (e.g., $x = 2$).
+        - For block math, you MUST put the equation on its own new line, wrapped in $$ (e.g., $$\n y = mx + c \n$$).
+        - NEVER use \[ , \] , \( , \) or \\boxed{}.
+        - If using aligned math, you MUST write exactly \\begin{aligned} and \\end{aligned} and wrap the whole block in $$.
+        - Do NOT squash words together when using bold text. Ensure there is a space outside the asterisks.
+        """
 
-        # CONTEXT:    
-        # {full_context}"""
+        if request.prompt_type == "strict":
+            system_prompt = f"""You are an expert academic research assistant. 
+            Answer the user's question using ONLY the information provided in the Context below. 
+            If the answer cannot be found in the Context, state exactly: "I do not have enough information to answer this."
 
-        # (D2). Build a hybrid promt to allow longer answers and expansions
-        # Step D: Build a hybrid prompt with STRICT formatting rules
-        system_prompt = f"""You are an expert academic research assistant in Machine Learning.
+            {formatting_rules}
 
-                        INSTRUCTIONS:
-                        1. Primary Source: Base your answer on the provided CONTEXT. 
-                        2. Mathematical Freedom: If the user asks for standard mathematical formulas, derivations, or foundational theory that is missing from the CONTEXT, you MAY provide them from your general knowledge.
-                        3. Depth & Length: Provide comprehensive explanations step-by-step.
+            CONTEXT:    
+            {full_context}"""
+        else:
+            system_prompt = f"""You are an expert academic research assistant in Machine Learning.
 
-                        STRICT FORMATTING RULES (CRITICAL):
-                        - You MUST use double blank lines (two Enters) before and after ALL headings (###), horizontal rules (---), tables, and lists. Never squash them together.
-                        - For inline math, use a single $ sign (e.g., $x = 2$).
-                        - For block math, you MUST put the equation on its own new line, wrapped in $$ (e.g., $$\n y = mx + c \n$$).
-                        - NEVER use \[ , \] , \( , \) or \boxed{{}}.
-                        - If using aligned math, you MUST write exactly \\begin{{aligned}} and \\end{{aligned}} and wrap the whole block in $$.
-                        - Do NOT squash words together when using bold text. Ensure there is a space outside the asterisks.
+            INSTRUCTIONS:
+            1. Primary Source: Base your answer on the provided CONTEXT. 
+            2. Mathematical Freedom: If the user asks for standard mathematical formulas, derivations, or foundational theory that is missing from the CONTEXT, you MAY provide them from your general knowledge.
+            3. Depth & Length: Provide comprehensive explanations step-by-step.
 
-                        CONTEXT:
-                        {full_context}"""
+            {formatting_rules}
 
+            CONTEXT:
+            {full_context}"""
         # Step E: Send the prompt to a massive 120-billion parameter model on Ollama Cloud
         response = ollama_client.chat(
             model="gpt-oss:120b-cloud",
@@ -134,7 +146,10 @@ async def chat_endpoint(request: SearchQuery):
                 {"role": "user", "content": user_query}
             ],
             options={
-                "temperature": 0,
+                "temperature": request.temperature,
+                "top_k": request.top_k,
+                "num_predict": request.num_predict,
+                "repeat_penalty": request.repeat_penalty
             }
         )
 
