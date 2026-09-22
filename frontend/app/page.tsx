@@ -31,10 +31,10 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from '@/components/ui/accordion';
-import { BrainIcon, UserIcon } from 'lucide-react';
+import { BrainIcon, UserIcon, BarChart3Icon } from 'lucide-react';
 
 type Citation = {
-  title: string;
+  title: string | null;
   distance: number;
   document: string;
 };
@@ -43,6 +43,11 @@ type Message = {
   role: 'user' | 'assistant';
   content: string;
   citations?: Citation[];
+};
+
+type EvaluationScores = {
+  faithfulness: number | null;
+  answer_relevancy: number | null;
 };
 
 const TOP_CATEGORIES = [
@@ -60,19 +65,23 @@ const TOP_CATEGORIES = [
 ];
 
 export default function ChatPage() {
-  // Chat States
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
-  // New RAG Evaluation States
   const [category, setCategory] = useState<string>('All');
   const [nResults, setNResults] = useState<number>(3);
   const [promptType, setPromptType] = useState<string>('hybrid');
   const [temperature, setTemperature] = useState<number>(0.0);
   const [topK, setTopK] = useState<number>(40);
-  const [numPredict, setNumPredict] = useState<number>(500);
+  const [numPredict, setNumPredict] = useState<number>(1000);
   const [repeatPenalty, setRepeatPenalty] = useState<number>(1.1);
+
+  const [isEvaluating, setIsEvaluating] = useState(false);
+  const [evalScores, setEvalScores] = useState<EvaluationScores>({
+    faithfulness: null,
+    answer_relevancy: null,
+  });
 
   const sendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -82,9 +91,9 @@ export default function ChatPage() {
     setMessages((prev) => [...prev, userMessage]);
     setInput('');
     setIsLoading(true);
+    setEvalScores({ faithfulness: null, answer_relevancy: null });
 
     try {
-      // Inject all the new evaluation parameters into the API request
       const response = await fetch(
         `${process.env.NEXT_PUBLIC_API_URL}/api/chat`,
         {
@@ -100,7 +109,7 @@ export default function ChatPage() {
             num_predict: numPredict,
             repeat_penalty: repeatPenalty,
           }),
-        },
+        }
       );
 
       if (!response.ok) throw new Error('Network error');
@@ -125,32 +134,68 @@ export default function ChatPage() {
     }
   };
 
+  const handleEvaluate = async () => {
+    const lastAiIndex = messages.map((m) => m.role).lastIndexOf('assistant');
+    if (lastAiIndex === -1) return;
+    
+    const aiMessage = messages[lastAiIndex];
+    const userMessage = messages[lastAiIndex - 1];
+    
+    if (!aiMessage || !userMessage) return;
+
+    const contexts = aiMessage.citations?.map((c) => c.document) || [];
+
+    setIsEvaluating(true);
+    try {
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/api/evaluate`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            user_input: userMessage.content,
+            retrieved_contexts: contexts,
+            response: aiMessage.content,
+          }),
+        }
+      );
+
+      if (!response.ok) throw new Error('Evaluation API failed');
+
+      const data = await response.json();
+      setEvalScores({
+        faithfulness: data.faithfulness,
+        answer_relevancy: data.answer_relevancy,
+      });
+    } catch (error) {
+      console.error('Evaluation Error:', error);
+    } finally {
+      setIsEvaluating(false);
+    }
+  };
+
   return (
     <main className='min-h-screen bg-zinc-50 p-4 md:p-8'>
-      <div className='max-w-7xl mx-auto'>
+      <div className='max-w-[1600px] mx-auto'>
         <header className='mb-8'>
-          <h1 className='text-3xl font-bold tracking-tight'>
-            RAG System Playground
+          <h1 className='text-3xl font-bold tracking-tight text-indigo-900'>
+            RAG System & Evaluation Tool
           </h1>
           <p className='text-zinc-500 mt-1'>
-            Adjust vector retrieval and LLM generation parameters in real-time.
+            Adjust generation parameters and run real-time Ragas metric evaluations on the model's output.
           </p>
         </header>
 
-        <div className='grid grid-cols-1 lg:grid-cols-3 gap-6'>
-          {/* ============================== */}
-          {/* LEFT COLUMN: SETTINGS DASHBOARD */}
-          {/* ============================== */}
-          <div className='lg:col-span-1 space-y-6'>
-            {/* 1. Retrieval Settings */}
+        <div className='grid grid-cols-1 xl:grid-cols-4 gap-6'>
+          
+          <div className='xl:col-span-1 space-y-6'>
             <Card>
               <CardHeader className='pb-3 border-b mb-4'>
                 <CardTitle className='text-lg'>Retrieval Settings</CardTitle>
               </CardHeader>
               <CardContent className='space-y-6'>
-                {/* Category Dropdown */}
                 <div className='space-y-2'>
-                  <label className='text-sm font-medium'>Domain Filter</label>
+                  <label className='text-sm font-medium mb-2'>Choose Domain Category</label>
                   <Select
                     value={category}
                     onValueChange={(value) => setCategory(value || 'All')}>
@@ -167,59 +212,44 @@ export default function ChatPage() {
                   </Select>
                 </div>
 
-                {/* n_results Slider */}
                 <div>
                   <div className='flex justify-between text-sm mb-2'>
-                    <label className='font-medium'>
-                      Context Window (n_results)
-                    </label>
+                    <label className='font-medium'>Context Window (n_results)</label>
                     <span className='text-zinc-500 font-mono'>{nResults}</span>
                   </div>
                   <input
                     type='range'
-                    min='1'
-                    max='10'
-                    step='1'
+                    min='1' max='10' step='1'
                     value={nResults}
                     onChange={(e) => setNResults(parseInt(e.target.value))}
                     className='w-full accent-zinc-800'
                   />
-                  <p className='text-xs text-zinc-400 mt-1'>
-                    Number of abstracts retrieved from ChromaDB.
-                  </p>
                 </div>
               </CardContent>
             </Card>
 
-            {/* 2. Generation Settings */}
             <Card>
               <CardHeader className='pb-3 border-b mb-4'>
-                <CardTitle className='text-lg'>Generation Settings</CardTitle>
+                <CardTitle className='text-lg'>Model Settings</CardTitle>
               </CardHeader>
               <CardContent className='space-y-6'>
-                {/* Prompt Type Dropdown */}
                 <div className='space-y-2'>
-                  <label className='text-sm font-medium'>
-                    System Prompt Behavior
-                  </label>
+                  <label className='text-sm font-medium'>System Prompt Behavior</label>
                   <Select
                     value={promptType}
-                    onValueChange={(value) => setPromptType(value)}>
+                    onValueChange={(value) => {
+                      if (value !== null) setPromptType(value);
+                    }}>
                     <SelectTrigger className='w-full'>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value='hybrid'>
-                        Hybrid (Allows parametric knowledge)
-                      </SelectItem>
-                      <SelectItem value='strict'>
-                        Strict (Pure RAG context only)
-                      </SelectItem>
+                      <SelectItem value='hybrid'>Hybrid (Allows parametric knowledge)</SelectItem>
+                      <SelectItem value='strict'>Strict (Pure RAG context only)</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
 
-                {/* Temperature Slider */}
                 <div>
                   <div className='flex justify-between text-sm mb-2'>
                     <label className='font-medium'>Temperature</label>
@@ -228,34 +258,26 @@ export default function ChatPage() {
                     </span>
                   </div>
                   <input
-                    type='range'
-                    min='0'
-                    max='1'
-                    step='0.1'
+                    type='range' min='0' max='1' step='0.1'
                     value={temperature}
                     onChange={(e) => setTemperature(parseFloat(e.target.value))}
                     className='w-full accent-zinc-800'
                   />
                 </div>
 
-                {/* Top-K Slider */}
                 <div>
                   <div className='flex justify-between text-sm mb-2'>
                     <label className='font-medium'>Top-K Sampling</label>
                     <span className='text-zinc-500 font-mono'>{topK}</span>
                   </div>
                   <input
-                    type='range'
-                    min='1'
-                    max='100'
-                    step='1'
+                    type='range' min='1' max='100' step='1'
                     value={topK}
                     onChange={(e) => setTopK(parseInt(e.target.value))}
                     className='w-full accent-zinc-800'
                   />
                 </div>
 
-                {/* Repeat Penalty Slider */}
                 <div>
                   <div className='flex justify-between text-sm mb-2'>
                     <label className='font-medium'>Repetition Penalty</label>
@@ -264,33 +286,20 @@ export default function ChatPage() {
                     </span>
                   </div>
                   <input
-                    type='range'
-                    min='1.0'
-                    max='2.0'
-                    step='0.1'
+                    type='range' min='1.0' max='2.0' step='0.1'
                     value={repeatPenalty}
-                    onChange={(e) =>
-                      setRepeatPenalty(parseFloat(e.target.value))
-                    }
+                    onChange={(e) => setRepeatPenalty(parseFloat(e.target.value))}
                     className='w-full accent-zinc-800'
                   />
                 </div>
 
-                {/* Num Predict (Max Tokens) Slider */}
                 <div>
                   <div className='flex justify-between text-sm mb-2'>
-                    <label className='font-medium'>
-                      Max Tokens (num_predict)
-                    </label>
-                    <span className='text-zinc-500 font-mono'>
-                      {numPredict}
-                    </span>
+                    <label className='font-medium'>Max Tokens (num_predict)</label>
+                    <span className='text-zinc-500 font-mono'>{numPredict}</span>
                   </div>
                   <input
-                    type='range'
-                    min='100'
-                    max='2000'
-                    step='50'
+                    type='range' min='100' max='4000' step='50'
                     value={numPredict}
                     onChange={(e) => setNumPredict(parseInt(e.target.value))}
                     className='w-full accent-zinc-800'
@@ -300,17 +309,14 @@ export default function ChatPage() {
             </Card>
           </div>
 
-          {/* ============================== */}
-          {/* RIGHT COLUMN: CHAT INTERFACE   */}
-          {/* ============================== */}
-          <div className='lg:col-span-2'>
+          <div className='xl:col-span-2'>
             <Card className='w-full h-[80vh] flex flex-col shadow-lg'>
               <CardContent className='flex-1 overflow-hidden p-0'>
                 <ScrollArea className='h-full p-6'>
                   <div className='flex flex-col gap-6'>
                     {messages.length === 0 && (
                       <div className='text-center text-zinc-500 mt-20'>
-                        Ask a question to test the current parameters.
+                        Ask a question to test the current parameters of the Model.
                       </div>
                     )}
 
@@ -319,13 +325,17 @@ export default function ChatPage() {
                         key={index}
                         className={`flex gap-4 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                         {msg.role === 'assistant' && (
-                          <Avatar className='flex items-center justify-center'>
-                            <BrainIcon className='w-4 h-4 text-zinc-600' />
+                          <Avatar className='flex items-center justify-center bg-indigo-100'>
+                            <BrainIcon className='w-4 h-4 text-indigo-700' />
                           </Avatar>
                         )}
 
                         <div
-                          className={`max-w-[85%] rounded-xl p-5 ${msg.role === 'user' ? 'bg-[#F2F0F0] text-black' : 'bg-white border shadow-sm'}`}>
+                          className={`max-w-[85%] rounded-xl p-5 ${
+                            msg.role === 'user'
+                              ? 'bg-[#F2F0F0] text-black'
+                              : 'bg-white border shadow-sm'
+                          }`}>
                           {msg.role === 'user' ? (
                             <p>{msg.content}</p>
                           ) : (
@@ -334,38 +344,23 @@ export default function ChatPage() {
                                 <ReactMarkdown
                                   remarkPlugins={[remarkGfm, remarkMath]}
                                   rehypePlugins={[
-                                    [
-                                      rehypeKatex,
-                                      { strict: false, throwOnError: false },
-                                    ],
+                                    [rehypeKatex, { strict: false, throwOnError: false }],
                                   ]}>
                                   {preprocessLaTeX(msg.content)}
                                 </ReactMarkdown>
                               </div>
 
-                              {/* Citations block */}
                               {msg.citations && msg.citations.length > 0 && (
                                 <div className='mt-6 pt-4 border-t text-xs text-zinc-500'>
                                   <strong className='block mb-2'>
-                                    Retrieved Top{' '}
-                                    <span className='font-bold'>
-                                      {msg.citations.length}
-                                    </span>{' '}
-                                    Sources (Based on L2 Distance criteria):
+                                    Retrieved Top <span className='font-bold'>{msg.citations.length}</span> Sources:
                                   </strong>
-                                  <Accordion
-                                    type='single'
-                                    collapsible
-                                    defaultValue={msg.citations[0].title}>
-                                    {msg.citations.map((citation, index) => (
-                                      <AccordionItem
-                                        key={index}
-                                        value={citation.title}>
+                                  <Accordion type='single' collapsible defaultValue={msg.citations[0].title || undefined}>
+                                    {msg.citations.map((citation, idx) => (
+                                      <AccordionItem key={idx} value={citation.title || `doc-${idx}`}>
                                         <AccordionTrigger className='border rounded-lg py-2 mb-2 px-3'>
                                           <div className='flex-1 mr-6 font-medium flex items-center justify-between'>
-                                            <p className='text-left'>
-                                              {citation.title}
-                                            </p>
+                                            <p className='text-left'>{citation.title}</p>
                                             <span className='ml-2 text-xs bg-zinc-100 py-1 px-2 rounded-full text-zinc-600 whitespace-nowrap'>
                                               Dist: {citation.distance}
                                             </span>
@@ -392,12 +387,11 @@ export default function ChatPage() {
                     ))}
                     {isLoading && (
                       <div className='flex gap-4 justify-start'>
-                        <Avatar>
-                          <AvatarFallback>AI</AvatarFallback>
+                        <Avatar className='flex items-center justify-center bg-indigo-100'>
+                          <BrainIcon className='w-4 h-4 text-indigo-700' />
                         </Avatar>
                         <div className='bg-white border shadow-sm rounded-xl p-4 text-zinc-500 text-sm animate-pulse'>
-                          Evaluating prompt against ChromaDB and generating
-                          response...
+                          Evaluating prompt against ChromaDB and generating response...
                         </div>
                       </div>
                     )}
@@ -411,47 +405,115 @@ export default function ChatPage() {
                     placeholder="Test the model's response..."
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
-                    disabled={isLoading}
+                    disabled={isLoading || isEvaluating}
                     className='flex-1'
                   />
-                  <Button type='submit' disabled={isLoading || !input.trim()}>
+                  <Button type='submit' disabled={isLoading || isEvaluating || !input.trim()}>
                     Send
+                  </Button>
+                  
+                  <Button 
+                    type='button' 
+                    variant="outline" 
+                    onClick={handleEvaluate}
+                    disabled={isLoading || isEvaluating || messages.length < 2 || messages[messages.length - 1].role !== 'assistant'}
+                    className="border-indigo-200 text-indigo-700 hover:bg-indigo-50"
+                  >
+                    {isEvaluating ? 'Evaluating...' : 'Evaluate Response'}
                   </Button>
                 </form>
               </CardFooter>
             </Card>
           </div>
+
+          <div className='xl:col-span-1 space-y-6'>
+            <Card className="h-full bg-zinc-900 text-white shadow-xl">
+              <CardHeader className='pb-4 border-b border-zinc-800'>
+                <CardTitle className='text-lg flex items-center gap-2'>
+                  <BarChart3Icon className="w-5 h-5 text-indigo-400" />
+                  Ragas Metrics Scorecard
+                </CardTitle>
+              </CardHeader>
+              <CardContent className='pt-6 space-y-8'>
+                {isEvaluating ? (
+                  <div className="text-center text-zinc-400 animate-pulse mt-10">
+                    <BrainIcon className="w-8 h-8 mx-auto mb-3 opacity-50" />
+                    <p>Ollama 120B Judge is evaluating the response...</p>
+                    <span className="text-sm text-zinc-500">(This may take a few seconds.)</span>
+                  </div>
+                ) : evalScores.faithfulness !== null && evalScores.answer_relevancy !== null ? (
+                  <>
+                    <div className="space-y-3">
+                      <div className="flex justify-between items-end">
+                        <h3 className="font-medium text-zinc-200">Faithfulness</h3>
+                        <span className={`text-2xl font-mono font-bold ${
+                          evalScores.faithfulness >= 0.8 ? 'text-green-400' : 
+                          evalScores.faithfulness >= 0.5 ? 'text-yellow-400' : 'text-red-400'
+                        }`}>
+                          {evalScores.faithfulness.toFixed(2)}
+                        </span>
+                      </div>
+                      <div className="w-full bg-zinc-800 rounded-full h-2">
+                        <div 
+                          className={`h-2 rounded-full ${
+                            evalScores.faithfulness >= 0.8 ? 'bg-green-400' : 
+                            evalScores.faithfulness >= 0.5 ? 'bg-yellow-400' : 'bg-red-400'
+                          }`}
+                          style={{ width: `${evalScores.faithfulness * 100}%` }}
+                        ></div>
+                      </div>
+                      <p className="text-xs text-zinc-400">
+                        {evalScores.faithfulness >= 0.8 ? "Strictly grounded in context." : 
+                         evalScores.faithfulness >= 0.5 ? "Contains parametric additions." : "High hallucination risk."}
+                      </p>
+                    </div>
+
+                    <div className="space-y-3">
+                      <div className="flex justify-between items-end">
+                        <h3 className="font-medium text-zinc-200">Answer Relevancy</h3>
+                        <span className={`text-2xl font-mono font-bold ${
+                          evalScores.answer_relevancy >= 0.8 ? 'text-blue-400' : 'text-orange-400'
+                        }`}>
+                          {evalScores.answer_relevancy.toFixed(2)}
+                        </span>
+                      </div>
+                      <div className="w-full bg-zinc-800 rounded-full h-2">
+                        <div 
+                          className={`h-2 rounded-full ${
+                            evalScores.answer_relevancy >= 0.8 ? 'bg-blue-400' : 'bg-orange-400'
+                          }`}
+                          style={{ width: `${evalScores.answer_relevancy * 100}%` }}
+                        ></div>
+                      </div>
+                      <p className="text-xs text-zinc-400">
+                        Measures how directly the output addresses the user prompt.
+                      </p>
+                    </div>
+                  </>
+                ) : (
+                  <div className="text-center text-zinc-500 mt-10 text-sm">
+                    Generate a response and click <strong className="text-zinc-300">Evaluate</strong> to run LLM-as-a-judge metrics.
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+
         </div>
       </div>
     </main>
   );
 }
 
-// This helper function cleans up the Markdown Text from the LLM model to eliminate formatting errors for LaTeX
 const preprocessLaTeX = (content: string) => {
   if (!content) return '';
   return (
     content
-      // 1. Catch standard LaTeX block delimiters \[...\]
       .replace(/\\\[([\s\S]*?)\\\]/g, (_match, p1) => `$$${p1}$$`)
-      // 2. Catch standard LaTeX inline delimiters \(...\)
       .replace(/\\\(([\s\S]*?)\\\)/g, (_match, p1) => `$${p1}$`)
-
-      // 3. Strip out \tag{...} completely (it breaks Markdown parsing when placed outside math)
       .replace(/\\tag{[^}]*}/g, '')
-
-      // 4. THE FIX: Catch \begin...\end blocks AND absorb any single or double $ around them
-      // This stops the $ $$...$$ $ conflict from happening     .replace(/\$*\s*(\\begin{[a-zA-Z*]+}[\s\S]*?\\end{[a-zA-Z*]+})\s*\$*/g, "\n$$\n$1\n$$\n")
-
-      // 5. Catch the bracket error: [ \begin{aligned} ... \end{aligned} ]
-      .replace(
-        /\[\s*(\\begin{[\s\S]*?}[\s\S]*?\\end{[\s\S]*?})\s*\]/g,
-        '\n$$\n$1\n$$\n',
-      ) // 6. Fix \bm{} to \boldsymbol{} (KaTeX compatibility)     .replace(/\\bm{/g, "\\boldsymbol{")     // 7. Fix escaped underscores     .replace(/\\_/g, "_")     // 8. Remove the \! negative space command     .replace(/\\!/g, "")     // 9. Remove the \boxed command but leave its contents safe     .replace(/\\boxed/g, "")          // 10. Clean up any accidental double-wrapping of $$
-      .replace(/\$\$\s*\$\$/g, '$$') // 11. Ensure block math $$ has safe line breaks around it
-      .replace(
-        /\$\$([\s\S]*?)\$\$/g,
-        (_match, p1) => `\n$$\n${p1.trim()}\n$$\n`,
-      )
+      .replace(/\$*\s*(\\begin{[a-zA-Z*]+}[\s\S]*?\\end{[a-zA-Z*]+})\s*\$*/g, '\n$$\n$1\n$$\n')
+      .replace(/\[\s*(\\begin{[\s\S]*?}[\s\S]*?\\end{[\s\S]*?})\s*\]/g, '\n$$\n$1\n$$\n')       .replace(/\\bm{/g, '\\boldsymbol{')       .replace(/\\_/g, '_')       .replace(/\\!/g, '')       .replace(/\\boxed/g, '')       .replace(/\$\$\s*\$\$/g, '$$')
+      .replace(/\$\$([\s\S]*?)\$\$/g, (_match, p1) => `\n$$\n${p1.trim()}\n$$\n`)
   );
 };

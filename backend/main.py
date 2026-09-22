@@ -1,4 +1,10 @@
 import os
+import sys
+from unittest.mock import MagicMock
+sys.modules['langchain_community.chat_models.vertexai'] = MagicMock()
+sys.modules['langchain_community.llms.vertexai'] = MagicMock()
+
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -7,6 +13,16 @@ from sentence_transformers import SentenceTransformer
 import chromadb
 from ollama import Client
 from dotenv import load_dotenv
+
+# Load the packages for the RAG evaluation script
+from datasets import Dataset
+from langchain_ollama import ChatOllama
+from langchain_huggingface import HuggingFaceEmbeddings
+from ragas.llms import LangchainLLMWrapper
+from ragas.embeddings import LangchainEmbeddingsWrapper
+from ragas import evaluate
+from ragas.metrics import faithfulness, answer_relevancy
+# ========================================================
 
 # 1. Load the secret keys from the .env file into memory
 load_dotenv()
@@ -60,6 +76,21 @@ ollama_client = Client(
     headers={'Authorization': f"Bearer {os.getenv('OLLAMA_API_KEY')}"}
 )
 
+# === RAGAS Judge Initialization  ===
+# Hardcoded to temperature 0.0 for objective grading
+judge_base_llm = ChatOllama(
+    model="gpt-oss:120b-cloud",
+    base_url="https://ollama.com", 
+    client_kwargs={"headers": {"Authorization": f"Bearer {os.getenv('OLLAMA_API_KEY')}"}},
+    temperature=0.0
+)
+ragas_judge_llm = LangchainLLMWrapper(judge_base_llm)
+
+judge_base_embeddings = HuggingFaceEmbeddings(
+    model_name="BAAI/bge-base-en-v1.5"
+)
+ragas_judge_embeddings = LangchainEmbeddingsWrapper(judge_base_embeddings)
+
 # 6. Define the exact JSON shape and data types Next.js must send to API endpoint
 class SearchQuery(BaseModel):
     query: str
@@ -71,6 +102,10 @@ class SearchQuery(BaseModel):
     repeat_penalty: Optional[float] = 1.1 # Ollama's combined presence/frequency penalty
     prompt_type: Optional[str] = "hybrid" # "strict" or "hybrid"
 
+class EvaluationRequest(BaseModel):
+    user_input: str
+    retrieved_contexts: list[str]
+    response: str
 
 # 7. Define the API Endpoint that the Frontend will request.
 @app.post("/api/chat")
@@ -127,7 +162,7 @@ async def chat_endpoint(request: SearchQuery):
             CONTEXT:    
             {full_context}"""
         else:
-            system_prompt = f"""You are an expert academic research assistant in Machine Learning.
+            system_prompt = f"""You are an expert academic research assistant in Machine Learning and Artificial Intelligence.
 
             INSTRUCTIONS:
             1. Primary Source: Base your answer on the provided CONTEXT. 
@@ -184,3 +219,34 @@ async def chat_endpoint(request: SearchQuery):
     except Exception as e:
         # If anything fails, safely send the error back to the frontend
         raise HTTPException(status_code=500, detail=str(e))
+
+# 8. Define the API Endpoint for RAGAS Evaluation
+@app.post("/api/evaluate")
+async def evaluate_response(request: EvaluationRequest):
+    try:
+        # 1. Structure the data exactly as Ragas expects
+        data_samples = {
+            "user_input": [request.user_input],
+            "retrieved_contexts": [request.retrieved_contexts],
+            "response": [request.response]
+        }
+        eval_dataset = Dataset.from_dict(data_samples)
+
+        # 2. Run the evaluation using the globally loaded Judge models
+        results = evaluate(
+            dataset=eval_dataset,
+            metrics=[faithfulness, answer_relevancy],
+            llm=ragas_judge_llm,
+            embeddings=ragas_judge_embeddings,
+        )
+
+        # 3. Extract the numerical scores from the Pandas DataFrame
+        df = results.to_pandas()
+        
+        return {
+            "faithfulness": float(df['faithfulness'].iloc[0]),
+            "answer_relevancy": float(df['answer_relevancy'].iloc[0])
+        }
+
+    except Exception as e:
+        return {"error": str(e)}

@@ -4,3 +4,6 @@ chromadb
 sentence-transformers
 ollama
 python-dotenv
+datasets
+ragas
+langchain-community
