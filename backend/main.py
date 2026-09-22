@@ -24,17 +24,17 @@ from ragas import evaluate
 from ragas.metrics import faithfulness, answer_relevancy
 # ========================================================
 
-# 1. Load the secret keys from the .env file into memory
+# Load the secret keys from the .env file into memory
 load_dotenv()
 
-# 2. Initialize the FastAPI application
+# Initialize the FastAPI application
 app = FastAPI(
     title='Backend of the RAG System',
     desciption='Description of the project',
     version='1.0.0'
 )
 
-# 2. Add CORS Middleware to explicitly trust the frontend
+# Add CORS Middleware to explicitly trust the frontend
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000"], 
@@ -44,15 +44,14 @@ app.add_middleware(
     allow_headers=["*"], 
 )
 
-# 3. Load the local Embedding Model (This may take some time on startup)
+# Load the local Embedding Model (This may take some time on startup)
 embedding_model = SentenceTransformer("BAAI/bge-base-en-v1.5")
 
-# --- DIAGNOSTIC BLOCK ---
 tenant = os.getenv("CHROMA_TENANT_ID")
 database = os.getenv("CHROMA_DATABASE")
 api_key = os.getenv("CHROMA_API_KEY")
 
-print("========== CHROMA DIAGNOSTICS ==========")
+print("========== CHROMA DB DIAGNOSTICS ==========")
 print(f"TENANT: {tenant}")
 print(f"DATABASE: {database}")
 print(f"API_KEY DETECTED: {bool(api_key)}")
@@ -62,7 +61,7 @@ if api_key:
 print("========================================")
 # ------------------------
 
-# 4. Connect to Chroma Cloud Database...
+# Connect to Chroma Cloud Database...
 chroma_client = chromadb.CloudClient(
     tenant=tenant,
     database=database,
@@ -77,7 +76,6 @@ ollama_client = Client(
 )
 
 # === RAGAS Judge Initialization  ===
-# Hardcoded to temperature 0.0 for objective grading
 judge_base_llm = ChatOllama(
     model="gpt-oss:120b-cloud",
     base_url="https://ollama.com", 
@@ -91,7 +89,7 @@ judge_base_embeddings = HuggingFaceEmbeddings(
 )
 ragas_judge_embeddings = LangchainEmbeddingsWrapper(judge_base_embeddings)
 
-# 6. Define the exact JSON shape and data types Next.js must send to API endpoint
+# Define the exact JSON shape and data types Next.js must send to API endpoint
 class SearchQuery(BaseModel):
     query: str
     category: Optional[str] = "All"
@@ -99,7 +97,7 @@ class SearchQuery(BaseModel):
     temperature: Optional[float] = 0.0
     top_k: Optional[int] = 40
     num_predict: Optional[int] = 500
-    repeat_penalty: Optional[float] = 1.1 # Ollama's combined presence/frequency penalty
+    repeat_penalty: Optional[float] = 1.1
     prompt_type: Optional[str] = "hybrid" # "strict" or "hybrid"
 
 class EvaluationRequest(BaseModel):
@@ -107,7 +105,7 @@ class EvaluationRequest(BaseModel):
     retrieved_contexts: list[str]
     response: str
 
-# 7. Define the API Endpoint that the Frontend will request.
+# Define the API Endpoint that the Frontend will request.
 @app.post("/api/chat")
 async def chat_endpoint(request: SearchQuery):
     user_query = request.query
@@ -120,7 +118,7 @@ async def chat_endpoint(request: SearchQuery):
         # Add the where-clause filter for ChromaDB
         where_clause = {"category": request.category} if request.category and request.category != "All" else None
 
-        # Step B. Query ChromaDB for the top 3 most relevant papers using the category filter
+        # Step B. Query ChromaDB for the top # n_results most relevant papers using the category filter
         results = collection.query(
             query_embeddings=query_vector,
             n_results=request.n_results,
@@ -128,7 +126,7 @@ async def chat_endpoint(request: SearchQuery):
         )
         
 
-        # Step C: Combine the retrieved abstracts into a single context string
+        # Step C: Combine the retrieved abstracts into a single context ready to be sent to the LLM. Each abstract is prefixed with its title for clarity.
         retrieved_abstracts = results['documents'][0]
         retrieved_titles = [meta['title'] for meta in results['metadatas'][0]]
         
@@ -173,7 +171,8 @@ async def chat_endpoint(request: SearchQuery):
 
             CONTEXT:
             {full_context}"""
-        # Step E: Send the prompt to a massive 120-billion parameter model on Ollama Cloud
+
+        # Step E: Send the prompt to the 120-billion parameter model on Ollama Cloud
         response = ollama_client.chat(
             model="gpt-oss:120b-cloud",
             messages=[
@@ -217,7 +216,7 @@ async def chat_endpoint(request: SearchQuery):
         
         
     except Exception as e:
-        # If anything fails, safely send the error back to the frontend
+        # If anything fails, then send the error back to the frontend
         raise HTTPException(status_code=500, detail=str(e))
 
 # 8. Define the API Endpoint for RAGAS Evaluation
@@ -232,7 +231,7 @@ async def evaluate_response(request: EvaluationRequest):
         }
         eval_dataset = Dataset.from_dict(data_samples)
 
-        # 2. Run the evaluation using the globally loaded Judge models
+        # 2. Run the evaluation using the Judge models
         results = evaluate(
             dataset=eval_dataset,
             metrics=[faithfulness, answer_relevancy],
