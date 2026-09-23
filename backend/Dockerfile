@@ -23,4 +23,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY --chown=user . /app
 
 # 8. Command to run the FastAPI server (Hugging Face expects port 7860)
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "7860"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "7860", "--loop", "asyncio"]
