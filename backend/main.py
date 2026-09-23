@@ -4,6 +4,10 @@ from unittest.mock import MagicMock
 sys.modules['langchain_community.chat_models.vertexai'] = MagicMock()
 sys.modules['langchain_community.llms.vertexai'] = MagicMock()
 
+# Allow Ragas to run its event loop inside FastAPI
+import nest_asyncio
+nest_asyncio.apply()
+
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -248,4 +252,5 @@ async def evaluate_response(request: EvaluationRequest):
         }
 
     except Exception as e:
+        print(f"RAGAS EVALUATION ERROR: {str(e)}") # Print error for HF logs and debbugging
         return {"error": str(e)}

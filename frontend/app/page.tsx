@@ -167,16 +167,17 @@ export default function ChatPage() {
           }),
         },
       );
-
-      if (!response.ok) throw new Error('Evaluation API failed');
-
       const data = await response.json();
+
+      if (!response.ok || data.error) throw new Error(data.error || 'Evaluation API failed');
+
       setEvalScores({
-        faithfulness: data.faithfulness,
-        answer_relevancy: data.answer_relevancy,
+        faithfulness: data.faithfulness ?? null,
+        answer_relevancy: data.answer_relevancy ?? null,
       });
     } catch (error) {
       console.error('Evaluation Error:', error);
+      alert(`Evaluation failed: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       setIsEvaluating(false);
     }
